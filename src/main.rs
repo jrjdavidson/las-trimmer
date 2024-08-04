@@ -35,20 +35,23 @@ fn main() {
     let points_read_clone = Arc::clone(&points_read);
     thread::spawn(move || loop {
         let start = Instant::now();
-        thread::sleep(Duration::from_secs(1));
+        let sleep_time = 1;
+        thread::sleep(Duration::from_secs(sleep_time));
         {
             let mut points = points_written_clone.lock().unwrap();
             let mut points_r = points_read_clone.lock().unwrap();
             if *points_r == 0 {
-                println!("No points were written in the last minute.");
+                println!("No points were written in the last {} seconds.", {
+                    sleep_time
+                });
                 *points_r = 0;
                 continue;
             }
             let mut total_points = total_points_clone.lock().unwrap();
             *total_points -= *points_r;
             println!(
-                "Points written/read/left in the last minute: {}/{}/{}",
-                *points, *points_r, *total_points
+                "Points written/read/left in the last {} seconds: {}/{}/{}",
+                sleep_time, *points, *points_r, *total_points
             );
             let time_elapsed = start.elapsed().as_secs();
             let points_per_second = *points_r / time_elapsed;
