@@ -6,13 +6,12 @@ use las::Write;
 use las::Writer;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::MutexGuard;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
 fn main() {
-    let vec_size = 100000;
+    let vec_size = 10000;
 
     let _path = "//file/Shared/SEESPhotoDatabase/Private/Pedro/01_Mt_Ruapehu_Lidar/merged_1.laz";
 
@@ -97,16 +96,18 @@ fn main() {
     }
 
     for i in 0..num_threads {
-        let reader = Arc::clone(&readers[i % readers.len()]); // This will cycle through the paths if there are more CPUs than paths
-        let writer = Arc::clone(&writer);
+        println!("{:?}", i % readers.len());
+
+        let mut reader = Arc::clone(&readers[i % readers.len()]); // This will cycle through the paths if there are more CPUs than paths
+        let mut writer = Arc::clone(&writer);
         let mut points_read = Arc::clone(&points_read);
         let mut points_written = Arc::clone(&points_written);
         let handle = thread::spawn(move || {
             let mut points_vec = Vec::<Point>::with_capacity(vec_size);
 
             process_points(
-                reader.lock().unwrap(),
-                writer.lock().unwrap(),
+                &mut reader,
+                &mut writer,
                 &mut points_vec,
                 &mut points_read,
                 &mut points_written,
@@ -149,14 +150,17 @@ fn main() {
 }
 
 fn process_points<W: std::io::Write + std::io::Seek + std::fmt::Debug + std::marker::Send>(
-    mut reader: MutexGuard<Reader>,
-    mut writer: MutexGuard<Writer<W>>,
+    reader: &mut Arc<Mutex<Reader>>,
+    writer: &mut Arc<Mutex<Writer<W>>>,
     vec: &mut Vec<Point>,
     points_read: &Arc<Mutex<u64>>,
     points_written: &Mutex<i32>,
 ) {
     loop {
-        let points_read_from_reader = reader.read_n_into(100000, vec).unwrap();
+        // let start = Instant::now();
+        let points_read_from_reader = reader.lock().unwrap().read_n_into(10000, vec).unwrap();
+        // let duration = start.elapsed();
+        // println!("Time spent waiting for lock: {:?}", duration);
         // Break the loop if no more points were read
         if points_read_from_reader == 0 {
             break;
@@ -172,7 +176,7 @@ fn process_points<W: std::io::Write + std::io::Seek + std::fmt::Debug + std::mar
                 && point.y > 5645723.0
                 && point.y < 5650440.0
             {
-                let result = writer.write(point);
+                let result = writer.lock().unwrap().write(point);
                 match result {
                     Ok(_) => {
                         let mut points_w = points_written.lock().unwrap();
