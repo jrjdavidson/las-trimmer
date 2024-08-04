@@ -1,0 +1,8 @@
+[package]
+name = "las-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+las = { version = "0.8.8", features = ["laz"] }
+num_cpus = "1.16.0"
