@@ -6,12 +6,13 @@ use las::Write;
 use las::Writer;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
 fn main() {
-    let vec_size = 10000;
+    let vec_size = 100000;
 
     let _path = "//file/Shared/SEESPhotoDatabase/Private/Pedro/01_Mt_Ruapehu_Lidar/merged_1.laz";
 
@@ -20,8 +21,8 @@ fn main() {
     let path4 = "//file/Shared/SEESPhotoDatabase/Private/Pedro/01_Mt_Ruapehu_Lidar/Mt_Ruapehu_Record14_19.laz";
     let paths = vec![path2, path3, path4];
 
-    // let num_threads = num_cpus::get();
-    // println!("Number of logical cores is {}", num_threads);
+    let num_threads = num_cpus::get();
+    println!("Number of logical cores is {}", num_threads);
 
     //keep track of points_written
 
@@ -76,38 +77,44 @@ fn main() {
         )
         .unwrap(),
     ));
-    let handles: Vec<_> = paths
-        .into_iter()
-        .map(|path| {
-            let mut reader = Reader::from_path(path).unwrap();
-            let number_of_points = reader.header().number_of_points();
-            let mut total_points = total_points.lock().unwrap();
 
-            *total_points += number_of_points;
-            println!("New Total:{:?}", total_points);
+    let paths: Vec<_> = paths.into_iter().collect();
+    let mut handles = vec![];
+    let mut readers = vec![];
+    for path in paths {
+        let reader = Reader::from_path(path).unwrap();
+        let number_of_points = reader.header().number_of_points();
+        let mut total_points = total_points.lock().unwrap();
 
-            let mut writer = Arc::clone(&writer);
-            let points_read = Arc::clone(&points_read);
-            let points_written = Arc::clone(&points_written);
+        *total_points += number_of_points;
+        println!("New Total:{:?}", total_points);
+        readers.push(Arc::new(Mutex::new(reader)));
+    }
 
+    for i in 0..num_threads {
+        let reader = Arc::clone(&readers[i % readers.len()]); // This will cycle through the paths if there are more CPUs than paths
+        let writer = Arc::clone(&writer);
+        let mut points_read = Arc::clone(&points_read);
+        let mut points_written = Arc::clone(&points_written);
+        let handle = thread::spawn(move || {
             let mut points_vec = Vec::<Point>::with_capacity(vec_size);
-            thread::spawn(move || {
-                process_points(
-                    &mut reader,
-                    &mut writer,
-                    &mut points_vec,
-                    &points_read,
-                    &points_written,
-                );
-            })
-        })
-        .collect();
 
-    // Wait for all threads to finish
+            process_points(
+                reader.lock().unwrap(),
+                writer.lock().unwrap(),
+                &mut points_vec,
+                &mut points_read,
+                &mut points_written,
+            );
+        });
+
+        handles.push(handle);
+    }
+
+    // Join the threads
     for handle in handles {
         handle.join().unwrap();
     }
-
     // for wrapped_point in reader1.points() {
     //     let point = wrapped_point.unwrap();
     //     let cl = point.classification;
@@ -137,14 +144,14 @@ fn main() {
 }
 
 fn process_points<W: std::io::Write + std::io::Seek + std::fmt::Debug + std::marker::Send>(
-    reader: &mut Reader,
-    writer: &mut Arc<Mutex<Writer<W>>>,
+    mut reader: MutexGuard<Reader>,
+    mut writer: MutexGuard<Writer<W>>,
     vec: &mut Vec<Point>,
     points_read: &Arc<Mutex<u64>>,
     points_written: &Mutex<i32>,
 ) {
     loop {
-        let points_read_from_reader = reader.read_n_into(10000, vec).unwrap();
+        let points_read_from_reader = reader.read_n_into(100000, vec).unwrap();
         // Break the loop if no more points were read
         if points_read_from_reader == 0 {
             break;
@@ -160,7 +167,7 @@ fn process_points<W: std::io::Write + std::io::Seek + std::fmt::Debug + std::mar
                 && point.y > 5645723.0
                 && point.y < 5650440.0
             {
-                let result = writer.lock().unwrap().write(point);
+                let result = writer.write(point);
                 match result {
                     Ok(_) => {
                         let mut points_w = points_written.lock().unwrap();
