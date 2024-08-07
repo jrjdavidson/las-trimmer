@@ -121,11 +121,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "las-rs"
+name = "las_trimmer"
 version = "0.1.0"
 dependencies = [
  "las",
  "num_cpus",
+ "thiserror",
 ]
 
 [[package]]
