@@ -1,3 +1,4 @@
+use las::Write;
 /// `LasProcessor` is a struct that represents a processor for LiDAR files.
 ///
 /// # Fields
@@ -15,13 +16,14 @@
 /// # Example
 ///
 /// ```rust
+/// use las_trimmer::LasProcessor;
 /// let processor = LasProcessor::new(
 ///     vec![
-///         "input1.laz",
-///         "input2.laz",
-///         "input3.laz",
+///         "input1.laz".to_string(),
+///         "input2.laz".to_string(),
+///         "input3.laz".to_string(),
 ///     ],
-///     "output.laz",
+///     "output.laz".to_string(),
 ///     |point| point.intensity > 20,
 /// );
 ///
@@ -35,6 +37,7 @@ use las::Point;
 use las::Read;
 use las::Reader;
 use las::Writer;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -67,7 +70,7 @@ impl LasProcessor {
 
     /// This method processes the LiDAR files. It reads points from the input files, applies the condition to each point, and writes the points that meet the condition to the output file. It returns a `Result<(), MyError>`. If the method completes successfully, it returns `Ok(())`. If an error occurs, it returns `Err(MyError)`.
     pub fn process_lidar_files(&self) -> Result<(), MyError> {
-        let vec_size = self.vec_size;
+        let vec_size = self.vec_size.clone();
         let num_threads = num_cpus::get();
         println!("Number of logical cores is {}", num_threads);
 
@@ -131,58 +134,49 @@ impl LasProcessor {
 
         let paths: Vec<_> = self.paths.iter().collect();
         let mut handles = vec![];
+        let (tx, rx) = mpsc::channel();
 
-        let total_cycles = num_threads / paths.len();
-
-        for i in 0..num_threads {
-            let path_no = i % paths.len();
-            let cycle_no = i / total_cycles;
-            let mut reader = Reader::from_path(paths[path_no])?;
-            let number_of_points = reader.header().number_of_points();
-            if cycle_no == 0 {
-                let number_of_points = reader.header().number_of_points();
-                let mut total_points = total_points.lock().map_err(|_| MyError::LockError)?;
-
-                *total_points += number_of_points;
-                println!("New Total:{:?}", total_points);
-            }
-            let points_per_cycle = number_of_points / (total_cycles as u64);
-            let start_point = points_per_cycle * cycle_no as u64;
-            reader.seek(start_point)?;
-
-            let mut writer = Arc::clone(&writer);
-            let mut points_read = Arc::clone(&points_read);
-            let mut points_written = Arc::clone(&points_written);
-            println!(
-                "{:?},{:?},{:?},{:?},{:?}",
-                path_no, cycle_no, number_of_points, points_per_cycle, start_point
-            );
-            let name = "thread".to_string() + &i.to_string();
+        // Reader threads
+        for path in paths {
+            let path = path.clone();
+            let tx = tx.clone();
             let condition = self.condition.clone();
-            let handle = thread::Builder::new()
-                .name(name)
-                .spawn(move || -> Result<(), MyError> {
-                    let mut points_vec = Vec::<Point>::with_capacity(vec_size as usize);
+            let handle = thread::spawn(move || -> Result<(), MyError> {
+                let mut reader = Reader::from_path(path)?;
+                let mut points_vec = Vec::with_capacity(vec_size as usize);
+                loop {
+                    let points_read = reader.read_n_into(vec_size, &mut points_vec)?;
+                    if points_read == 0 {
+                        break;
+                    }
 
-                    let result = process_points(
-                        &mut reader,
-                        &mut writer,
-                        &mut points_vec,
-                        &mut points_read,
-                        &mut points_written,
-                        points_per_cycle,
-                        vec_size,
-                        &*condition,
-                    )?;
-                    Ok(result)
-                });
+                    let filtered_points: Vec<Point> = points_vec
+                        .drain(..)
+                        .filter(|point| condition(point))
+                        .collect();
 
+                    if !filtered_points.is_empty() {
+                        tx.send(filtered_points).map_err(|_| MyError::SendError)?;
+                    }
+                }
+                Ok(())
+            });
             handles.push(handle);
         }
 
-        for handle in handles {
-            handle?.join().map_err(|_| MyError::ThreadError)??;
-        }
+        // Single writer thread
+        let writer_handle = thread::spawn(move || -> Result<(), MyError> {
+            while let Ok(points_vec) = rx.recv() {
+                let mut writer = writer.lock().map_err(|_| MyError::LockError)?;
+                for point in points_vec {
+                    writer.write(point)?;
+                }
+            }
+            Ok(())
+        });
+
+        writer_handle.join().map_err(|_| MyError::ThreadError)??;
+
         Ok(())
     }
 }

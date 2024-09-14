@@ -10,4 +10,6 @@ pub enum MyError {
     LockError,
     #[error("An error occur in a thread.")]
     ThreadError,
+    #[error("An error occur when sending data using mspc.")]
+    SendError,
 }
