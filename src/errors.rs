@@ -6,7 +6,7 @@ pub enum MyError {
     ReadError(#[from] las::Error),
     #[error("failed to read from reader: {0}")]
     InputOutputError(#[from] std::io::Error),
-    #[error("failed to lock mutex")]
+    #[error("failed to lock mutex.")]
     LockError,
     #[error("An error occur in a thread.")]
     ThreadError,
