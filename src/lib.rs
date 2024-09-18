@@ -60,7 +60,7 @@ impl LasProcessor {
         Self {
             paths,
             output_path,
-            vec_size: 100000 as u64, // can modulate this value to see effect on speed?
+            vec_size: 10000 as u64, // can modulate this value to see effect on speed?
             condition: Arc::new(condition),
         }
     }
@@ -128,7 +128,7 @@ impl LasProcessor {
 
         let paths: Vec<_> = self.paths.iter().collect();
         let sendthreads = num_threads / 2;
-        let (tx, rx) = mpsc::sync_channel(sendthreads);
+        let (tx, rx) = mpsc::channel();
         let pool = ThreadPool::new(sendthreads);
         // Reader threads
         let total_paths = self.paths.len(); // Get the total number of paths
@@ -210,7 +210,9 @@ impl LasProcessor {
                     .unwrap();
                 *points_tw += no_of_points;
             }
-            writer.write_points(points_vec)?;
+            for point in points_vec {
+                writer.write_point(point)?;
+            }
             {
                 let mut points_w = writer_pwc.lock().map_err(|_| MyError::LockError)?;
                 *points_w += no_of_points;
