@@ -7,9 +7,9 @@ use las::Point;
 use las_trimmer::LasProcessor;
 
 fn main() -> Result<(), MyError> {
-    let folder_path = "\\\\file\\Research\\LidarPowerline\\03_RESEARCH\\03_POTREE_STREAM_WALK\\01_COCKLE_BAY\\02_LAS_TILES\\NW";
+    let folder_path = "\\\\file\\Research\\LidarPowerline\\03_RESEARCH\\03_POTREE_STREAM_WALK\\01_COCKLE_BAY\\02_LAS_TILES";
     // let output_path = format!("{}/test.laz", folder_path);
-    let output_path = "C:/temp/NW.las".to_string();
+    let output_path = "C:/temp/NWtest.las".to_string();
     // laz is 6x slower than las
     let paths: Vec<String> = fs::read_dir(folder_path)?
         .filter_map(Result::ok)
