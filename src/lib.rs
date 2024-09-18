@@ -60,7 +60,7 @@ impl LasProcessor {
         Self {
             paths,
             output_path,
-            vec_size: 1000 as u64, // can modulate this value to see effect on speed?
+            vec_size: 100000 as u64, // can modulate this value to see effect on speed?
             condition: Arc::new(condition),
         }
     }
@@ -84,7 +84,7 @@ impl LasProcessor {
         thread::spawn(move || -> Result<(), MyError> {
             loop {
                 let start = Instant::now();
-                let sleep_time = 10;
+                let sleep_time = 1;
                 thread::sleep(Duration::from_secs(sleep_time));
                 {
                     let mut points = points_written_clone
@@ -199,30 +199,24 @@ impl LasProcessor {
         // Single writer thread
         let writer_pwc = Arc::clone(&points_written);
         let output_path = self.output_path.clone();
-        let writer_handle = thread::spawn(move || -> Result<(), MyError> {
-            let mut writer = Writer::from_path(output_path, header)?;
+        let mut writer = Writer::from_path(output_path, header)?;
 
-            while let Ok(points_vec) = rx.recv() {
-                let no_of_points = points_vec.len().clone();
-                {
-                    let mut points_tw = points_to_write_left
-                        .lock()
-                        .map_err(|_| MyError::LockError)
-                        .unwrap();
-                    *points_tw += no_of_points;
-                }
-                for point in points_vec {
-                    writer.write_point(point)?;
-                }
-                {
-                    let mut points_w = writer_pwc.lock().map_err(|_| MyError::LockError)?;
-                    *points_w += no_of_points;
-                }
+        while let Ok(points_vec) = rx.recv() {
+            let no_of_points = points_vec.len().clone();
+            {
+                let mut points_tw = points_to_write_left
+                    .lock()
+                    .map_err(|_| MyError::LockError)
+                    .unwrap();
+                *points_tw += no_of_points;
             }
-            Ok(())
-        });
+            writer.write_points(points_vec)?;
+            {
+                let mut points_w = writer_pwc.lock().map_err(|_| MyError::LockError)?;
+                *points_w += no_of_points;
+            }
+        }
 
-        writer_handle.join().map_err(|_| MyError::ThreadError)??;
         let end_pwc = Arc::clone(&points_written);
 
         let end_prc = Arc::clone(&points_read);

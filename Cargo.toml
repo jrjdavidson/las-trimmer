@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-las = { version = "0.9.1", features = ["laz-parallel"] }
+las = { path = "../las-rs" }
 num_cpus = "1.16.0"
-rayon = "1.10.0"
 thiserror = "1.0.63"
 threadpool = "1.8.1"
