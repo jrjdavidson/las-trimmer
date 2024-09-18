@@ -33,6 +33,7 @@ use crate::errors::MyError;
 use las::Point;
 use las::Reader;
 use las::Writer;
+use num_format::{Locale, ToFormattedString};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -60,13 +61,17 @@ impl LasProcessor {
         Self {
             paths,
             output_path,
-            vec_size: 10000 as u64, // can modulate this value to see effect on speed?
+            vec_size: 1000 as u64, // can modulate this value to see effect on speed?
             condition: Arc::new(condition),
         }
     }
 
     /// This method processes the LiDAR files. It reads points from the input files, applies the condition to each point, and writes the points that meet the condition to the output file. It returns a `Result<(), MyError>`. If the method completes successfully, it returns `Ok(())`. If an error occurs, it returns `Err(MyError)`.
     pub fn process_lidar_files(&self) -> Result<(), MyError> {
+        let start = Instant::now();
+
+        // Your code here
+
         let vec_size = self.vec_size.clone();
         let num_threads = num_cpus::get();
         println!("Number of logical cores is {}", num_threads);
@@ -107,12 +112,12 @@ impl LasProcessor {
                         .lock()
                         .map_err(|_| MyError::LockError)?;
                     println!(
-                        "Points written/read/left in the last {} second(s): {}/{}/{}/{}",
+                        "Points written/read/left in the last {} second(s): {} / {} / {} / {}",
                         time_elapsed,
-                        *points,
-                        *points_r,
-                        *points_to_read_left,
-                        *points_to_write_left
+                        (*points).to_formatted_string(&Locale::fr),
+                        (*points_r).to_formatted_string(&Locale::fr),
+                        (*points_to_read_left).to_formatted_string(&Locale::fr),
+                        (*points_to_write_left).to_formatted_string(&Locale::fr),
                     );
 
                     *points = 0;
@@ -189,7 +194,7 @@ impl LasProcessor {
                 let duration = start_time.elapsed(); // End the timer
                 let points_per_second = total_points_read as f64 / duration.as_secs_f64(); // Calculate speed
 
-                println!("Done : {:?} ({} out of {})", path, i + 1, total_paths); // Print path number out of total                println!("Size : {:?}", reader.header().number_of_points());
+                println!("Done : {:?} ({} out of {})", path, i, total_paths); // Print path number out of total                println!("Size : {:?}", reader.header().number_of_points());
                 println!("Total points read: {}", total_points_read);
                 println!("Time taken: {:.2?}", duration);
                 println!("Read speed: {:.2} points/second", points_per_second); // Print read speed
@@ -230,6 +235,15 @@ impl LasProcessor {
             "Points written/read at the end of script: {}/{}",
             *points, *points_r
         );
+        println!(
+            "Total Points written {}",
+            *(Arc::clone(&points_to_write_left)
+                .lock()
+                .map_err(|_| MyError::LockError)?)
+        );
+
+        let duration = start.elapsed();
+        println!("Time taken: {:?}", duration);
 
         Ok(())
     }

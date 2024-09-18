@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 las = "0.9.1"
+num-format = "0.4.4"
 num_cpus = "1.16.0"
 thiserror = "1.0.63"
 threadpool = "1.8.1"
