@@ -7,7 +7,7 @@ use las::Point;
 use las_trimmer::LasProcessor;
 
 fn main() -> Result<(), MyError> {
-    let folder_path = "\\\\file\\Research\\LidarPowerline\\03_RESEARCH\\03_POTREE_STREAM_WALK\\01_COCKLE_BAY\\02_LAS_TILES\\test";
+    let folder_path = "\\\\file\\Research\\LidarPowerline\\03_RESEARCH\\03_POTREE_STREAM_WALK\\01_COCKLE_BAY\\02_LAS_TILES\\";
     // let output_path = format!("{}/test.laz", folder_path);
     let output_path = "C:/temp/NWtest.las".to_string();
     // laz is 6x slower than las
@@ -16,7 +16,7 @@ fn main() -> Result<(), MyError> {
         .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "las"))
         .map(|entry| entry.path().to_string_lossy().to_string())
         .collect();
-    let processor = LasProcessor::new(paths, output_path, |_point: &Point| true);
+    let processor = LasProcessor::new(paths, output_path, |_point: &Point| false);
 
     processor.process_lidar_files()?;
 

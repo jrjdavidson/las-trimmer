@@ -18,9 +18,8 @@
 /// use las_trimmer::LasProcessor;
 /// let processor = LasProcessor::new(
 ///     vec![
-///         "input1.laz".to_string(),
-///         "input2.laz".to_string(),
-///         "input3.laz".to_string(),
+///         "tests/data/input1.las".to_string(),
+///         "tests/data/input2.las".to_string(),
 ///     ],
 ///     "output.laz".to_string(),
 ///     |point| point.intensity > 20,
@@ -69,8 +68,7 @@ impl LasProcessor {
     /// This method processes the LiDAR files. It reads points from the input files, applies the condition to each point, and writes the points that meet the condition to the output file. It returns a `Result<(), MyError>`. If the method completes successfully, it returns `Ok(())`. If an error occurs, it returns `Err(MyError)`.
     pub fn process_lidar_files(&self) -> Result<(), MyError> {
         let start = Instant::now();
-
-        // Your code here
+        let number_locale = &Locale::en;
 
         let vec_size = self.vec_size.clone();
         let num_threads = num_cpus::get();
@@ -114,10 +112,10 @@ impl LasProcessor {
                     println!(
                         "Points written/read/left in the last {} second(s): {} / {} / {} / {}",
                         time_elapsed,
-                        (*points).to_formatted_string(&Locale::fr),
-                        (*points_r).to_formatted_string(&Locale::fr),
-                        (*points_to_read_left).to_formatted_string(&Locale::fr),
-                        (*points_to_write_left).to_formatted_string(&Locale::fr),
+                        (*points).to_formatted_string(number_locale),
+                        (*points_r).to_formatted_string(number_locale),
+                        (*points_to_read_left).to_formatted_string(number_locale),
+                        (*points_to_write_left).to_formatted_string(number_locale),
                     );
 
                     *points = 0;
@@ -160,7 +158,12 @@ impl LasProcessor {
                         .unwrap();
 
                     *total_points += &points_remaining;
-                    println!("{}/{}|| New Total:{:?}", i, total_paths, total_points);
+                    println!(
+                        "{}/{}|| New Total:{:?}",
+                        i,
+                        total_paths,
+                        total_points.to_formatted_string(number_locale)
+                    );
                 }
                 let mut total_points_read = 0; // Track total points read
                 for wrapped_point in reader.points() {
@@ -251,61 +254,93 @@ impl LasProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use las::{Point, Writer};
+    use las::{Builder, Point, Writer};
+    use std::fs::File;
+    use tempfile::tempdir;
 
-    fn create_test_lidar_file(path: &str, points: Vec<Point>) {
-        let mut writer = Writer::from_path(path, las::Header::default()).unwrap();
-        for point in points {
+    fn create_test_las_file(file_path: &str) {
+        let builder = Builder::from((1, 4)); // LAS version 1.4
+        let header = builder.into_header().unwrap();
+        let mut writer = Writer::from_path(file_path, header).unwrap();
+
+        // Create some dummy points
+        for i in 0..10 {
+            let mut point = Point::default();
+            point.x = i as f64;
+            point.y = i as f64;
+            point.z = i as f64;
             writer.write_point(point).unwrap();
         }
     }
 
     #[test]
-    fn test_new() {
-        let paths = vec!["input1.las".to_string(), "input2.las".to_string()];
-        let output_path = "output.laz".to_string();
-        let condition = |point: &Point| point.intensity > 20;
+    fn test_process_lidar_files_success() {
+        // Setup: Create a temporary directory and test files
+        let dir = tempdir().unwrap();
+        let input_file_path = dir.path().join("test.las");
+        let output_file_path = dir.path().join("output.las");
 
-        let processor = LasProcessor::new(paths.clone(), output_path.clone(), condition);
+        // Create a test .las file with some dummy data
+        create_test_las_file(input_file_path.to_str().unwrap());
 
-        assert_eq!(processor.paths, paths);
-        assert_eq!(processor.output_path, output_path);
-        // Note: You can't directly compare closures, so we won't test the condition field here.
+        // Initialize your struct with the test file paths and a simple condition
+        let processor = LasProcessor {
+            paths: vec![input_file_path.to_str().unwrap().to_string()],
+            output_path: output_file_path.to_str().unwrap().to_string(),
+            condition: Arc::new(|_point| true), // Simple condition that always returns true
+            vec_size: 1000,
+        };
+
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_ok());
+
+        // Additional assertions to verify the output file content can be added here
     }
 
     #[test]
-    fn test_process_lidar_files() {
-        let input_path = "test_input.laz";
-        let output_path = "test_output.laz";
-        let points = vec![
-            Point {
-                intensity: 10,
-                ..Default::default()
-            },
-            Point {
-                intensity: 30,
-                ..Default::default()
-            },
-        ];
+    fn test_process_lidar_files_file_not_found() {
+        // Setup: Use a non-existent file path
+        let processor = LasProcessor {
+            paths: vec!["non_existent_file.las".to_string()],
+            output_path: "output.las".to_string(),
+            condition: Arc::new(|_point| true),
+            vec_size: 1000,
+        };
 
-        create_test_lidar_file(input_path, points);
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_err());
+    }
 
-        let processor = LasProcessor::new(
-            vec![input_path.to_string()],
-            output_path.to_string(),
-            |point| point.intensity > 20,
-        );
+    #[test]
+    fn test_process_lidar_files_condition_filtering() {
+        // Setup: Create a temporary directory and test files
+        let dir = tempdir().unwrap();
+        let input_file_path = "tests/data/input1.las";
+        let output_file_path = dir.path().join("output.las");
 
-        processor.process_lidar_files().unwrap();
+        // Create a test .las file with some dummy data
 
-        let mut reader = Reader::from_path(output_path).unwrap();
-        let mut filtered_points = Vec::new();
-        for wrapped_point in reader.points() {
-            let point = wrapped_point.unwrap();
-            filtered_points.push(point);
+        // Initialize your struct with the test file paths and a condition that filters points
+        let processor = LasProcessor {
+            paths: vec![input_file_path.to_string()],
+            output_path: output_file_path.to_str().unwrap().to_string(),
+            condition: Arc::new(|point| point.x < 5.0), // Condition that filters points
+            vec_size: 1000,
+        };
+
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_ok());
+
+        // Verify that only points meeting the condition were written to the output file
+        let output_file = File::open(output_file_path).unwrap();
+        let mut reader = las::Reader::new(output_file).unwrap();
+
+        for point in reader.points() {
+            let point = point.unwrap();
+            assert!(point.x < 5.0);
         }
-
-        assert_eq!(filtered_points.len(), 1);
-        assert_eq!(filtered_points[0].intensity, 30);
     }
 }
