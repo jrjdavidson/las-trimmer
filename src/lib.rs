@@ -50,10 +50,16 @@ pub struct LasProcessor {
     /// An `Arc` containing a closure that takes a `Point` as input and returns a boolean. This closure is applied to each point read from the input files. Only points for which the closure returns `true` are written to the output file.
     condition: Arc<dyn Fn(&Point) -> bool + Send + Sync>,
     vec_size: u64,
+    strip_extra_bytes: bool,
 }
 impl LasProcessor {
     /// This method creates a new `LasProcessor`. It takes as input a vector of strings representing the paths to the input LiDAR files, a string representing the path to the output LiDAR file, and a closure that takes a `las::Point` as input and returns a boolean. It returns a `LasProcessor`.
-    pub fn new<F>(paths: Vec<String>, output_path: String, condition: F) -> Self
+    pub fn new<F>(
+        paths: Vec<String>,
+        output_path: String,
+        condition: F,
+        strip_extra_bytes: bool,
+    ) -> Self
     where
         F: Fn(&Point) -> bool + Send + Sync + 'static,
     {
@@ -62,6 +68,7 @@ impl LasProcessor {
             output_path,
             vec_size: 1000 as u64, // can modulate this value to see effect on speed?
             condition: Arc::new(condition),
+            strip_extra_bytes,
         }
     }
 
@@ -218,7 +225,10 @@ impl LasProcessor {
                     .unwrap();
                 *points_tw += no_of_points;
             }
-            for point in points_vec {
+            for mut point in points_vec {
+                if self.strip_extra_bytes {
+                    point.extra_bytes.clear();
+                }
                 writer.write_point(point)?;
             }
             {
@@ -289,6 +299,7 @@ mod tests {
             output_path: output_file_path.to_str().unwrap().to_string(),
             condition: Arc::new(|_point| true), // Simple condition that always returns true
             vec_size: 1000,
+            strip_extra_bytes: false,
         };
 
         // Call the method and assert the result
@@ -306,6 +317,7 @@ mod tests {
             output_path: "output.las".to_string(),
             condition: Arc::new(|_point| true),
             vec_size: 1000,
+            strip_extra_bytes: false,
         };
 
         // Call the method and assert the result
@@ -328,6 +340,7 @@ mod tests {
             output_path: output_file_path.to_str().unwrap().to_string(),
             condition: Arc::new(|point| point.x < 5.0), // Condition that filters points
             vec_size: 1000,
+            strip_extra_bytes: false,
         };
 
         // Call the method and assert the result
