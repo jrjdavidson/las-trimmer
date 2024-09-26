@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-las = "0.9.1"
+clap = { version = "4.5.18", features = ["derive"] }
+las = { version = "0.9.1", features = ["laz-parallel"] }
 num-format = "0.4.4"
 num_cpus = "1.16.0"
 tempfile = "3.12.0"
