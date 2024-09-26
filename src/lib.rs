@@ -23,6 +23,7 @@
 ///     ],
 ///     "output.laz".to_string(),
 ///     |point| point.intensity > 20,
+///     false
 /// );
 ///
 /// processor.process_lidar_files().unwrap();
@@ -131,9 +132,23 @@ impl LasProcessor {
             }
         });
         let header;
+        use las::point::Format;
+        use las::Builder;
         {
             let reader1 = Reader::from_path(&self.paths[0])?;
-            header = reader1.header().clone()
+            let old_header = reader1.header().clone();
+            if self.strip_extra_bytes {
+                let format_u8 = old_header.point_format().to_u8()?;
+
+                let mut new_format = Format::new(format_u8).unwrap();
+                let mut builder = Builder::new(old_header.into_raw()?)?;
+                new_format.extra_bytes = 0;
+                builder.point_format = new_format;
+
+                header = builder.into_header().unwrap();
+            } else {
+                header = old_header;
+            }
         }
 
         let paths: Vec<_> = self.paths.iter().collect();
