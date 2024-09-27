@@ -281,10 +281,10 @@ impl LasProcessor {
 
         let end_prc = Arc::clone(&points_read);
 
-        let points = end_pwc.lock().map_err(|_| MyError::LockError)?;
+        let points_w = end_pwc.lock().map_err(|_| MyError::LockError)?;
         let points_r = end_prc.lock().map_err(|_| MyError::LockError)?;
 
-        println!("Total points written/read: {}/{}", *points, *points_r);
+        println!("Total points read/written: {}/{}", *points_r, *points_w);
 
         let duration = start.elapsed();
         println!("Time taken: {:?}", duration);
