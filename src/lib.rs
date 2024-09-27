@@ -284,17 +284,7 @@ impl LasProcessor {
         let points = end_pwc.lock().map_err(|_| MyError::LockError)?;
         let points_r = end_prc.lock().map_err(|_| MyError::LockError)?;
 
-        println!(
-            "Points written/read at the end of script: {}/{}",
-            *points, *points_r
-        );
-
-        println!(
-            "Total Points written {}",
-            *(Arc::clone(&total_points_to_write)
-                .lock()
-                .map_err(|_| MyError::LockError)?)
-        );
+        println!("Total points written/read: {}/{}", *points, *points_r);
 
         let duration = start.elapsed();
         println!("Time taken: {:?}", duration);
