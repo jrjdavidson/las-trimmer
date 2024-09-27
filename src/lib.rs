@@ -82,10 +82,10 @@ impl LasProcessor {
         let num_threads = num_cpus::get();
         println!("Number of logical cores is {}", num_threads);
 
-        let total_points = Arc::new(Mutex::new(0));
-        let total_points_clone = Arc::clone(&total_points);
-        let points_to_write_left = Arc::new(Mutex::new(0));
-        let points_to_write_left_clone = Arc::clone(&points_to_write_left);
+        let total_points_to_read = Arc::new(Mutex::new(0));
+        let total_points_to_read_clone = Arc::clone(&total_points_to_read);
+        let total_points_to_write = Arc::new(Mutex::new(0));
+        let total_points_to_write_clone = Arc::clone(&total_points_to_write);
 
         let points_written = Arc::new(Mutex::new(0));
         let points_written_clone = Arc::clone(&points_written);
@@ -93,41 +93,52 @@ impl LasProcessor {
         let points_read_clone = Arc::clone(&points_read);
 
         thread::spawn(move || -> Result<(), MyError> {
+            let mut previous_read = 0;
+            let mut previous_written = 0;
             loop {
                 let start = Instant::now();
                 let sleep_time = 1;
                 thread::sleep(Duration::from_secs(sleep_time));
                 {
-                    let mut points = points_written_clone
+                    let points_w = points_written_clone
                         .lock()
                         .map_err(|_| MyError::LockError)?;
-                    let mut points_r = points_read_clone.lock().map_err(|_| MyError::LockError)?;
+                    let points_r = points_read_clone.lock().map_err(|_| MyError::LockError)?;
                     let time_elapsed = start.elapsed().as_secs();
 
-                    if *points_r == 0 && *points == 0 {
+                    if *points_r == 0 && *points_w == 0 {
                         println!(
                             "No points were written or read in the last {} second(s).",
                             { time_elapsed }
                         );
                         continue;
                     }
-                    let mut points_to_read_left =
-                        total_points_clone.lock().map_err(|_| MyError::LockError)?;
-                    *points_to_read_left -= *points_r;
-                    let points_to_write_left = points_to_write_left_clone
+                    let total_points_to_read = total_points_to_read_clone
                         .lock()
                         .map_err(|_| MyError::LockError)?;
-                    println!(
-                        "Points written/read/left in the last {} second(s): {} / {} / {} / {}",
-                        time_elapsed,
-                        (*points).to_formatted_string(number_locale),
-                        (*points_r).to_formatted_string(number_locale),
-                        (*points_to_read_left).to_formatted_string(number_locale),
-                        (*points_to_write_left).to_formatted_string(number_locale),
-                    );
+                    let points_to_read_left = *total_points_to_read - *points_r;
+                    let total_points_to_write = total_points_to_write_clone
+                        .lock()
+                        .map_err(|_| MyError::LockError)?;
+                    println!("{:?}", total_points_to_write);
+                    println!("{:?}", points_w);
 
-                    *points = 0;
-                    *points_r = 0;
+                    let points_to_write_left = *total_points_to_write - *points_w;
+
+                    let percentage = (*points_r as f64 / *total_points_to_read as f64) * 100.0;
+                    let read_in_last_interval = *points_r - previous_read;
+                    let written_in_last_interval = *points_w - previous_written;
+                    println!(
+                        "Points read/written in the last {} second(s) and left to read/write : {} / {} / {} / {} / {:.2}%",
+                        time_elapsed,
+                        (read_in_last_interval).to_formatted_string(number_locale),
+                        (written_in_last_interval).to_formatted_string(number_locale),
+                        (points_to_read_left).to_formatted_string(number_locale),
+                        (points_to_write_left).to_formatted_string(number_locale),
+                        percentage
+                    );
+                    previous_read = *points_r;
+                    previous_written = *points_w;
                 }
             }
         });
@@ -164,29 +175,34 @@ impl LasProcessor {
             let tx = tx.clone();
             let condition = self.condition.clone();
             let points_read_clone = Arc::clone(&points_read);
-            let total_points_clone = Arc::clone(&total_points);
+            let total_points_to_read_clone = Arc::clone(&total_points_to_read);
+            let total_points_to_write_clone = Arc::clone(&total_points_to_write);
+
             println!("Starting read thread {} for {:?}", i, path);
+            {
+                let reader = Reader::from_path(&path).unwrap();
+                let number_of_points = reader.header().number_of_points();
+                {
+                    let mut total_points_to_read = total_points_to_read_clone
+                        .lock()
+                        .map_err(|_| MyError::LockError)
+                        .unwrap();
+
+                    *total_points_to_read += &number_of_points;
+                    println!(
+                        "{}/{}|| New Total:{}",
+                        i,
+                        total_paths,
+                        total_points_to_read.to_formatted_string(number_locale)
+                    );
+                }
+            }
 
             pool.execute(move || {
                 let start_time = Instant::now(); // Start the timer
 
                 let mut reader = Reader::from_path(&path).unwrap();
                 let mut points_vec = Vec::with_capacity(vec_size as usize);
-                let points_remaining = reader.header().number_of_points();
-                {
-                    let mut total_points = total_points_clone
-                        .lock()
-                        .map_err(|_| MyError::LockError)
-                        .unwrap();
-
-                    *total_points += &points_remaining;
-                    println!(
-                        "{}/{}|| New Total:{:?}",
-                        i,
-                        total_paths,
-                        total_points.to_formatted_string(number_locale)
-                    );
-                }
                 let mut total_points_read = 0; // Track total points read
                 for wrapped_point in reader.points() {
                     let point = wrapped_point.unwrap();
@@ -203,6 +219,13 @@ impl LasProcessor {
                     if condition(&point) {
                         points_vec.push(point);
                         if points_vec.len() >= vec_size.try_into().unwrap() {
+                            {
+                                let mut points_tw = total_points_to_write_clone
+                                    .lock()
+                                    .map_err(|_| MyError::LockError)
+                                    .unwrap();
+                                *points_tw += points_vec.len();
+                            }
                             tx.send(points_vec.clone())
                                 .map_err(|_| MyError::SendError)
                                 .unwrap();
@@ -213,16 +236,24 @@ impl LasProcessor {
 
                 // Send any remaining points in the points_vec
                 if !points_vec.is_empty() {
+                    {
+                        let mut points_tw = total_points_to_write_clone
+                            .lock()
+                            .map_err(|_| MyError::LockError)
+                            .unwrap();
+                        *points_tw += points_vec.len();
+                    }
                     tx.send(points_vec).map_err(|_| MyError::SendError).unwrap();
                 }
 
                 let duration = start_time.elapsed(); // End the timer
-                let points_per_second = total_points_read as f64 / duration.as_secs_f64(); // Calculate speed
+                let points_per_second = total_points_read as f64 / duration.as_secs_f64();
 
-                println!("Done : {:?} ({} out of {})", path, i, total_paths); // Print path number out of total                println!("Size : {:?}", reader.header().number_of_points());
+                println!("Done : {:?} ({} out of {})", path, i, total_paths);
+                println!("Size : {:?}", reader.header().number_of_points());
                 println!("Total points read: {}", total_points_read);
                 println!("Time taken: {:.2?}", duration);
-                println!("Read speed: {:.2} points/second", points_per_second); // Print read speed
+                println!("Read speed: {:.2} points/second", points_per_second);
             });
         }
         drop(tx);
@@ -233,13 +264,7 @@ impl LasProcessor {
 
         while let Ok(points_vec) = rx.recv() {
             let no_of_points = points_vec.len().clone();
-            {
-                let mut points_tw = points_to_write_left
-                    .lock()
-                    .map_err(|_| MyError::LockError)
-                    .unwrap();
-                *points_tw += no_of_points;
-            }
+
             for mut point in points_vec {
                 if self.strip_extra_bytes {
                     point.extra_bytes.clear();
@@ -263,9 +288,10 @@ impl LasProcessor {
             "Points written/read at the end of script: {}/{}",
             *points, *points_r
         );
+
         println!(
             "Total Points written {}",
-            *(Arc::clone(&points_to_write_left)
+            *(Arc::clone(&total_points_to_write)
                 .lock()
                 .map_err(|_| MyError::LockError)?)
         );
