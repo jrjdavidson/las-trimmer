@@ -120,8 +120,6 @@ impl LasProcessor {
                     let total_points_to_write = total_points_to_write_clone
                         .lock()
                         .map_err(|_| MyError::LockError)?;
-                    println!("{:?}", total_points_to_write);
-                    println!("{:?}", points_w);
 
                     let points_to_write_left = *total_points_to_write - *points_w;
 
