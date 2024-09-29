@@ -17,6 +17,8 @@ pub enum MyError {
     InvalidOutputExtension,
     #[error("Input path must be a file or directory.")]
     InvalidInputPath,
+    #[error("Function not defined, please choose from list.")]
+    InvalidFilterFunction,
 }
 
 impl Debug for MyError {
