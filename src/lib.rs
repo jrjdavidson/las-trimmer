@@ -161,7 +161,7 @@ impl LasProcessor {
         }
 
         let paths: Vec<_> = self.paths.iter().collect();
-        let sendthreads = num_threads / 2;
+        let sendthreads = num_threads - 2;
         let (tx, rx) = mpsc::channel();
         let pool = ThreadPool::new(sendthreads);
         // Reader threads
