@@ -39,7 +39,7 @@ enum Commands {
     AlwaysTrue,
     /// Only reads points and doesn't write any- for testing purposes mainly.
     AlwaysFalse,
-    /// Crops the point cloud based on specified bounds
+    /// Crops the point cloud based on specified bounds. Max values are excluded (up to but not including max_x), min values are included (up to and including min_x)
     Crop {
         /// Minimum x value
         #[arg(long, allow_hyphen_values = true, value_name = "MIN_X")]
@@ -89,7 +89,7 @@ fn crop_filter(
         }
     }
     if let Some(max_x) = max_x {
-        if point.x > max_x {
+        if point.x >= max_x {
             return false;
         }
     }
@@ -99,7 +99,7 @@ fn crop_filter(
         }
     }
     if let Some(max_y) = max_y {
-        if point.y > max_y {
+        if point.y >= max_y {
             return false;
         }
     }
@@ -109,7 +109,7 @@ fn crop_filter(
         }
     }
     if let Some(max_z) = max_z {
-        if point.z > max_z {
+        if point.z >= max_z {
             return false;
         }
     }
