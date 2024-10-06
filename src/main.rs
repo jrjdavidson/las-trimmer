@@ -1,12 +1,9 @@
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
+use las::Point;
 use las_trimmer::errors::MyError;
+use las_trimmer::LasProcessor;
 use std::fs;
 use std::path::PathBuf;
-
-use las::Point;
-use las_trimmer::LasProcessor;
-
-use clap::Parser;
 /// Las file trimmer
 ///
 /// This tool reads LAS and LAZ files and optionally trims some points based on specified criteria. Using the excellent las-rs crate (https://docs.rs/las/latest/las/) that does most of the heavy lifting in this package.
