@@ -19,6 +19,8 @@ pub enum MyError {
     InvalidInputPath,
     #[error("Function not defined, please choose from list.")]
     InvalidFilterFunction,
+    #[error("Output paths number must match the number of filter arguments")]
+    MismatchedFiltersAndOutputs,
 }
 
 impl Debug for MyError {

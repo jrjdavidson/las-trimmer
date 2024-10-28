@@ -1,9 +1,11 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, ValueEnum};
 use las::Point;
 use las_trimmer::errors::MyError;
-use las_trimmer::LasProcessor;
+use las_trimmer::{LasProcessor, SharedFunction};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+
 /// Las file trimmer
 ///
 /// This tool reads LAS and LAZ files and optionally trims some points based on specified criteria. Using the excellent las-rs crate (https://docs.rs/las/latest/las/) that does most of the heavy lifting in this package.
@@ -17,53 +19,25 @@ use std::path::PathBuf;
 struct Cli {
     /// Sets the input file or folder
     #[arg(short, long, value_name = "INPUT")]
-    input: PathBuf,
+    input: Vec<PathBuf>,
 
-    /// Sets the output file. File type must be either .las or .laz
-    #[arg(short, long, value_name = "OUTPUT")]
-    output: PathBuf,
+    /// Sets the output files. File types must be either .las or .laz
+    #[arg(short, long, value_name = "OUTPUTS")]
+    output: Vec<PathBuf>,
 
     /// Strips extra bytes from the LAS/LAZ file. Can dramatically decrease resulting size
     #[arg(short, long, value_name = "Strip extra bytes")]
     strip_extra_bytes: bool,
+
     /// Specifies the filtering function to apply to points.
-    #[command(subcommand)]
-    command: Option<Commands>,
+    #[arg(short, long, value_name = "FILTER")]
+    filter: Vec<FilterType>,
 }
-#[derive(Subcommand)]
-enum Commands {
-    /// Default 'filter' function- returns and writes all points.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum FilterType {
     AlwaysTrue,
-    /// Only reads points and doesn't write any- for testing purposes mainly.
     AlwaysFalse,
-    /// Crops the point cloud based on specified bounds. Max values are excluded (up to but not including max_x), min values are included (up to and including min_x)
-    Crop {
-        /// Minimum x value
-        #[arg(long, allow_hyphen_values = true, value_name = "MIN_X")]
-        min_x: Option<f64>,
-
-        /// Maximum x value
-        #[arg(long, allow_hyphen_values = true, value_name = "MAX_X")]
-        max_x: Option<f64>,
-
-        /// Minimum y value
-        #[arg(long, allow_hyphen_values = true, value_name = "MIN_Y")]
-        min_y: Option<f64>,
-
-        /// Maximum y value
-        #[arg(long, allow_hyphen_values = true, value_name = "MAX_Y")]
-        max_y: Option<f64>,
-
-        /// Minimum z value
-        #[arg(long, allow_hyphen_values = true, value_name = "MIN_Z")]
-        min_z: Option<f64>,
-
-        /// Maximum z value
-        #[arg(long, allow_hyphen_values = true, value_name = "MAX_Z")]
-        max_z: Option<f64>,
-    },
 }
-
 fn return_true(_point: &Point) -> bool {
     true
 }
@@ -71,109 +45,63 @@ fn return_true(_point: &Point) -> bool {
 fn return_false(_point: &Point) -> bool {
     false
 }
-fn crop_filter(
-    point: &Point,
-    min_x: Option<f64>,
-    max_x: Option<f64>,
-    min_y: Option<f64>,
-    max_y: Option<f64>,
-    min_z: Option<f64>,
-    max_z: Option<f64>,
-) -> bool {
-    if let Some(min_x) = min_x {
-        if point.x < min_x {
-            return false;
-        }
-    }
-    if let Some(max_x) = max_x {
-        if point.x >= max_x {
-            return false;
-        }
-    }
-    if let Some(min_y) = min_y {
-        if point.y < min_y {
-            return false;
-        }
-    }
-    if let Some(max_y) = max_y {
-        if point.y >= max_y {
-            return false;
-        }
-    }
-    if let Some(min_z) = min_z {
-        if point.z < min_z {
-            return false;
-        }
-    }
-    if let Some(max_z) = max_z {
-        if point.z >= max_z {
-            return false;
-        }
-    }
-    true
-}
 
 fn main() -> Result<(), MyError> {
     let cli = Cli::parse();
 
-    let input_path = cli.input;
-    let output_path = cli.output;
+    let input_paths = cli.input;
+    let output_paths: Vec<String> = cli
+        .output
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
     let strip_extra_bytes = cli.strip_extra_bytes;
 
-    // Check if the output file has a valid extension
-    let output_extension = output_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("");
-    if output_extension != "las" && output_extension != "laz" {
-        return Err(MyError::InvalidOutputExtension);
+    // Check if the output files have valid extensions
+    for output_path in &output_paths {
+        let path_buf = PathBuf::from(output_path);
+        let output_extension = path_buf
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+        if output_extension != "las" && output_extension != "laz" {
+            return Err(MyError::InvalidOutputExtension);
+        }
     }
 
-    let paths = if input_path.is_file() {
-        vec![input_path.to_string_lossy().to_string()]
-    } else if input_path.is_dir() {
-        fs::read_dir(input_path)?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "las"))
-            .map(|entry| entry.path().to_string_lossy().to_string())
-            .collect()
-    } else {
-        return Err(MyError::InvalidInputPath);
-    };
+    let mut paths = Vec::new();
+    for input_path in input_paths {
+        if input_path.is_file() {
+            paths.push(input_path.to_string_lossy().to_string());
+        } else if input_path.is_dir() {
+            let dir_paths: Vec<String> = fs::read_dir(input_path)?
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "las"))
+                .map(|entry| entry.path().to_string_lossy().to_string())
+                .collect();
+            paths.extend(dir_paths);
+        } else {
+            return Err(MyError::InvalidInputPath);
+        }
+    }
 
     println!("{:?}", paths);
 
-    let filter_function: Box<dyn Fn(&Point) -> bool + Send + Sync + 'static> = match &cli.command {
-        Some(Commands::Crop {
-            min_x,
-            max_x,
-            min_y,
-            max_y,
-            min_z,
-            max_z,
-        }) => {
-            let min_x = *min_x;
-            let max_x = *max_x;
-            let min_y = *min_y;
-            let max_y = *max_y;
-            let min_z = *min_z;
-            let max_z = *max_z;
+    let filter_functions: Vec<SharedFunction> = cli
+        .filter
+        .iter()
+        .map(|filter| match filter {
+            FilterType::AlwaysTrue => Arc::new(return_true) as SharedFunction,
+            FilterType::AlwaysFalse => Arc::new(return_false) as SharedFunction,
+        })
+        .collect();
 
-            Box::new(move |point: &Point| {
-                crop_filter(point, min_x, max_x, min_y, max_y, min_z, max_z)
-            })
-        }
-        Some(Commands::AlwaysTrue) => Box::new(return_true),
-        Some(Commands::AlwaysFalse) => Box::new(return_false),
-        None => Box::new(return_true),
-    };
+    // Check that the number of filter functions matches the number of output files
+    if filter_functions.len() != output_paths.len() {
+        return Err(MyError::MismatchedFiltersAndOutputs);
+    }
 
-    let processor = LasProcessor::new(
-        paths,
-        output_path.to_string_lossy().to_string(),
-        filter_function,
-        strip_extra_bytes,
-    );
+    let processor = LasProcessor::new(paths, output_paths, filter_functions, strip_extra_bytes);
 
     processor.process_lidar_files()?;
 

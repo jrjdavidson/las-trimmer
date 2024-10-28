@@ -21,8 +21,8 @@
 ///         "tests/data/input1.las".to_string(),
 ///         "tests/data/input2.las".to_string(),
 ///     ],
-///     "output.laz".to_string(),
-///     |point| point.intensity > 20,
+///     vec!["output.laz".to_string()],
+///     vec![Arc::new(|point| point.intensity > 20)],
 ///     false
 /// );
 ///
@@ -34,6 +34,8 @@ use las::Point;
 use las::Reader;
 use las::Writer;
 use num_format::{Locale, ToFormattedString};
+use std::fs::File;
+use std::io::BufWriter;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -42,33 +44,36 @@ use std::time::Duration;
 use std::time::Instant;
 use threadpool::ThreadPool;
 
+pub type SharedFunction = Arc<dyn Fn(&Point) -> bool + Send + Sync>;
 /// `LasProcessor` is a struct that represents a processor for LiDAR files.
 pub struct LasProcessor {
     /// A vector of strings representing the paths to the input LiDAR files.
     paths: Vec<String>,
-    /// A string representing the path to the output LiDAR file.
-    output_path: String,
-    /// An `Arc` containing a closure that takes a `Point` as input and returns a boolean. This closure is applied to each point read from the input files. Only points for which the closure returns `true` are written to the output file.
-    condition: Arc<dyn Fn(&Point) -> bool + Send + Sync>,
+    /// A vector of strings representing the paths to the output LiDAR files.
+    output_paths: Vec<String>,
+    /// A vector of `Arc` containing closures that take a `Point` as input and return a boolean.
+    /// Each closure is applied to each point read from the input files. Only points for which the closure returns `true` are written to the corresponding output file.
+    conditions: Vec<SharedFunction>,
     vec_size: u64,
     strip_extra_bytes: bool,
 }
+
 impl LasProcessor {
-    /// This method creates a new `LasProcessor`. It takes as input a vector of strings representing the paths to the input LiDAR files, a string representing the path to the output LiDAR file, and a closure that takes a `las::Point` as input and returns a boolean. It returns a `LasProcessor`.
-    pub fn new<F>(
+    /// This method creates a new `LasProcessor`. It takes as input a vector of strings representing the paths to the input LiDAR files,
+    /// a vector of strings representing the paths to the output LiDAR files, and a vector of closures that take a `las::Point` as input and return a boolean.
+    /// It returns a `LasProcessor`.
+    pub fn new(
         paths: Vec<String>,
-        output_path: String,
-        condition: F,
+        output_paths: Vec<String>,
+        conditions: Vec<SharedFunction>,
         strip_extra_bytes: bool,
     ) -> Self
-    where
-        F: Fn(&Point) -> bool + Send + Sync + 'static,
-    {
+where {
         Self {
             paths,
-            output_path,
-            vec_size: 1000 as u64, // can modulate this value to see effect on speed?
-            condition: Arc::new(condition),
+            output_paths,
+            vec_size: 1000, // can modulate this value to see effect on speed
+            conditions,
             strip_extra_bytes,
         }
     }
@@ -78,7 +83,7 @@ impl LasProcessor {
         let start = Instant::now();
         let number_locale = &Locale::en;
 
-        let vec_size = self.vec_size.clone();
+        let vec_size = self.vec_size;
         let num_threads = num_cpus::get();
         println!("Number of logical cores is {}", num_threads);
 
@@ -148,6 +153,7 @@ impl LasProcessor {
             let old_header = reader1.header().clone();
             if self.strip_extra_bytes {
                 let format_u8 = old_header.point_format().to_u8()?;
+                println!("Old header format : {}", format_u8);
 
                 let mut new_format = Format::new(format_u8).unwrap();
                 let mut builder = Builder::new(old_header.into_raw()?)?;
@@ -164,14 +170,15 @@ impl LasProcessor {
         let sendthreads = num_threads - 2;
         let (tx, rx) = mpsc::channel();
         let pool = ThreadPool::new(sendthreads);
+
         // Reader threads
-        let total_paths = self.paths.len(); // Get the total number of paths
+        let total_paths = self.paths.len();
         let mut i = 0;
         for path in paths {
             i += 1;
             let path = path.clone();
             let tx = tx.clone();
-            let condition = self.condition.clone();
+            let conditions = self.conditions.clone();
             let points_read_clone = Arc::clone(&points_read);
             let total_points_to_read_clone = Arc::clone(&total_points_to_read);
             let total_points_to_write_clone = Arc::clone(&total_points_to_write);
@@ -197,14 +204,16 @@ impl LasProcessor {
             }
 
             pool.execute(move || {
-                let start_time = Instant::now(); // Start the timer
+                let start_time = Instant::now();
 
                 let mut reader = Reader::from_path(&path).unwrap();
-                let mut points_vec = Vec::with_capacity(vec_size as usize);
-                let mut total_points_read = 0; // Track total points read
+                let mut points_vecs: Vec<Vec<Point>> =
+                    vec![Vec::with_capacity(vec_size as usize); conditions.len()];
+                let mut total_points_read = 0;
+
                 for wrapped_point in reader.points() {
                     let point = wrapped_point.unwrap();
-                    total_points_read += 1; // Update total points read
+                    total_points_read += 1;
 
                     {
                         let mut points = points_read_clone
@@ -214,37 +223,42 @@ impl LasProcessor {
                         *points += 1;
                     }
 
-                    if condition(&point) {
-                        points_vec.push(point);
-                        if points_vec.len() >= vec_size.try_into().unwrap() {
-                            {
-                                let mut points_tw = total_points_to_write_clone
-                                    .lock()
-                                    .map_err(|_| MyError::LockError)
+                    for (j, condition) in conditions.iter().enumerate() {
+                        if condition(&point) {
+                            points_vecs[j].push(point.clone());
+                            if points_vecs[j].len() >= vec_size.try_into().unwrap() {
+                                {
+                                    let mut points_tw = total_points_to_write_clone
+                                        .lock()
+                                        .map_err(|_| MyError::LockError)
+                                        .unwrap();
+                                    *points_tw += points_vecs[j].len();
+                                }
+                                tx.send((j, points_vecs[j].clone()))
+                                    .map_err(|_| MyError::SendError)
                                     .unwrap();
-                                *points_tw += points_vec.len();
+                                points_vecs[j].clear();
                             }
-                            tx.send(points_vec.clone())
-                                .map_err(|_| MyError::SendError)
-                                .unwrap();
-                            points_vec.clear(); // Clear the points_vec after sending
                         }
                     }
                 }
 
-                // Send any remaining points in the points_vec
-                if !points_vec.is_empty() {
-                    {
-                        let mut points_tw = total_points_to_write_clone
-                            .lock()
-                            .map_err(|_| MyError::LockError)
+                for (j, points_vec) in points_vecs.into_iter().enumerate() {
+                    if !points_vec.is_empty() {
+                        {
+                            let mut points_tw = total_points_to_write_clone
+                                .lock()
+                                .map_err(|_| MyError::LockError)
+                                .unwrap();
+                            *points_tw += points_vec.len();
+                        }
+                        tx.send((j, points_vec))
+                            .map_err(|_| MyError::SendError)
                             .unwrap();
-                        *points_tw += points_vec.len();
                     }
-                    tx.send(points_vec).map_err(|_| MyError::SendError).unwrap();
                 }
 
-                let duration = start_time.elapsed(); // End the timer
+                let duration = start_time.elapsed();
                 let points_per_second = total_points_read as f64 / duration.as_secs_f64();
 
                 println!("Done : {:?} ({} out of {})", path, i, total_paths);
@@ -255,32 +269,30 @@ impl LasProcessor {
             });
         }
         drop(tx);
-        // Single writer thread
-        let writer_pwc = Arc::clone(&points_written);
-        let output_path = self.output_path.clone();
-        let mut writer = Writer::from_path(output_path, header)?;
 
-        while let Ok(points_vec) = rx.recv() {
-            let no_of_points = points_vec.len().clone();
+        // Writer threads
+        let mut writers: Vec<Writer<BufWriter<File>>> = Vec::new();
+        for output_path in &self.output_paths {
+            let writer = Writer::from_path(output_path, header.clone())?;
+            writers.push(writer);
+        }
+        while let Ok((index, points_vec)) = rx.recv() {
+            let no_of_points = points_vec.len();
 
             for mut point in points_vec {
                 if self.strip_extra_bytes {
                     point.extra_bytes.clear();
                 }
-                writer.write_point(point)?;
+                writers[index].write_point(point)?;
             }
             {
-                let mut points_w = writer_pwc.lock().map_err(|_| MyError::LockError)?;
+                let mut points_w = points_written.lock().map_err(|_| MyError::LockError)?;
                 *points_w += no_of_points;
             }
         }
 
-        let end_pwc = Arc::clone(&points_written);
-
-        let end_prc = Arc::clone(&points_read);
-
-        let points_w = end_pwc.lock().map_err(|_| MyError::LockError)?;
-        let points_r = end_prc.lock().map_err(|_| MyError::LockError)?;
+        let points_w = points_written.lock().map_err(|_| MyError::LockError)?;
+        let points_r = points_read.lock().map_err(|_| MyError::LockError)?;
 
         println!("Total points read/written: {}/{}", *points_r, *points_w);
 
@@ -304,10 +316,12 @@ mod tests {
 
         // Create some dummy points
         for i in 0..10 {
-            let mut point = Point::default();
-            point.x = i as f64;
-            point.y = i as f64;
-            point.z = i as f64;
+            let point = las::Point {
+                x: i as f64,
+                y: i as f64,
+                z: i as f64,
+                ..Default::default()
+            };
             writer.write_point(point).unwrap();
         }
     }
@@ -325,8 +339,8 @@ mod tests {
         // Initialize your struct with the test file paths and a simple condition
         let processor = LasProcessor {
             paths: vec![input_file_path.to_str().unwrap().to_string()],
-            output_path: output_file_path.to_str().unwrap().to_string(),
-            condition: Arc::new(|_point| true), // Simple condition that always returns true
+            output_paths: vec![output_file_path.to_str().unwrap().to_string()],
+            conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
             vec_size: 1000,
             strip_extra_bytes: false,
         };
@@ -343,8 +357,8 @@ mod tests {
         // Setup: Use a non-existent file path
         let processor = LasProcessor {
             paths: vec!["non_existent_file.las".to_string()],
-            output_path: "output.las".to_string(),
-            condition: Arc::new(|_point| true),
+            output_paths: vec!["output.las".to_string()],
+            conditions: vec![Arc::new(|_point| true)],
             vec_size: 1000,
             strip_extra_bytes: false,
         };
@@ -366,8 +380,8 @@ mod tests {
         // Initialize your struct with the test file paths and a condition that filters points
         let processor = LasProcessor {
             paths: vec![input_file_path.to_string()],
-            output_path: output_file_path.to_str().unwrap().to_string(),
-            condition: Arc::new(|point| point.x < 5.0), // Condition that filters points
+            output_paths: vec![output_file_path.to_str().unwrap().to_string()],
+            conditions: vec![Arc::new(|point| point.x < 5.0)], // Condition that filters points
             vec_size: 1000,
             strip_extra_bytes: false,
         };
@@ -383,6 +397,118 @@ mod tests {
         for point in reader.points() {
             let point = point.unwrap();
             assert!(point.x < 5.0);
+        }
+    }
+
+    #[test]
+    fn test_process_lidar_files_multiple_conditions() {
+        // Setup: Create a temporary directory and test files
+        let dir = tempdir().unwrap();
+        let input_file_path = dir.path().join("test.las");
+        let output_file_path1 = dir.path().join("output1.las");
+        let output_file_path2 = dir.path().join("output2.las");
+
+        // Create a test .las file with some dummy data
+        create_test_las_file(input_file_path.to_str().unwrap());
+
+        // Initialize your struct with the test file paths and multiple conditions
+        let processor = LasProcessor {
+            paths: vec![input_file_path.to_str().unwrap().to_string()],
+            output_paths: vec![
+                output_file_path1.to_str().unwrap().to_string(),
+                output_file_path2.to_str().unwrap().to_string(),
+            ],
+            conditions: vec![
+                Arc::new(|point: &Point| point.x < 5.0), // Condition for output1
+                Arc::new(|point: &Point| point.x >= 5.0), // Condition for output2
+            ],
+            vec_size: 1000,
+            strip_extra_bytes: false,
+        };
+
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_ok());
+
+        // Verify that points meeting the first condition were written to the first output file
+        let output_file1 = File::open(output_file_path1).unwrap();
+        let mut reader1 = las::Reader::new(output_file1).unwrap();
+        for point in reader1.points() {
+            let point = point.unwrap();
+            assert!(point.x < 5.0);
+        }
+
+        // Verify that points meeting the second condition were written to the second output file
+        let output_file2 = File::open(output_file_path2).unwrap();
+        let mut reader2 = las::Reader::new(output_file2).unwrap();
+        for point in reader2.points() {
+            let point = point.unwrap();
+            assert!(point.x >= 5.0);
+        }
+    }
+
+    #[test]
+    fn test_process_lidar_files_empty_input() {
+        // Setup: Create a temporary directory and test files
+        let dir = tempdir().unwrap();
+        let input_file_path = dir.path().join("empty.las");
+        let output_file_path = dir.path().join("output.las");
+        // Create an empty test .las file
+        let builder = Builder::from((1, 4)); // LAS version 1.4
+        let header = builder.into_header().unwrap();
+        println!("{}", input_file_path.to_str().unwrap());
+        {
+            let _writer = Writer::from_path(input_file_path.to_str().unwrap(), header).unwrap();
+        }
+
+        // Initialize your struct with the test file paths and a simple condition
+        let processor = LasProcessor {
+            paths: vec![input_file_path.to_str().unwrap().to_string()],
+            output_paths: vec![output_file_path.to_str().unwrap().to_string()],
+            conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
+            vec_size: 1000,
+            strip_extra_bytes: false,
+        };
+
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_ok());
+
+        // Verify that the output file is also empty
+        let output_file = File::open(output_file_path).unwrap();
+        let mut reader = las::Reader::new(output_file).unwrap();
+        assert!(reader.points().next().is_none());
+    }
+
+    #[test]
+    fn test_process_lidar_files_strip_extra_bytes() {
+        // Setup: Create a temporary directory and test files
+        let dir = tempdir().unwrap();
+        let input_file_path = dir.path().join("test.las");
+        let output_file_path = dir.path().join("output.las");
+
+        // Create a test .las file with some dummy data
+        create_test_las_file(input_file_path.to_str().unwrap());
+
+        // Initialize your struct with the test file paths and a simple condition
+        let processor = LasProcessor {
+            paths: vec![input_file_path.to_str().unwrap().to_string()],
+            output_paths: vec![output_file_path.to_str().unwrap().to_string()],
+            conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
+            vec_size: 1000,
+            strip_extra_bytes: true, // Enable strip_extra_bytes
+        };
+
+        // Call the method and assert the result
+        let result = processor.process_lidar_files();
+        assert!(result.is_ok());
+
+        // Verify that the output file has points with empty extra_bytes
+        let output_file = File::open(output_file_path).unwrap();
+        let mut reader = las::Reader::new(output_file).unwrap();
+        for point in reader.points() {
+            let point = point.unwrap();
+            assert!(point.extra_bytes.is_empty());
         }
     }
 }
