@@ -72,7 +72,7 @@ where {
         Self {
             paths,
             output_paths,
-            vec_size: 1000, // can modulate this value to see effect on speed
+            vec_size: 100000, // can modulate this value to see effect on speed
             conditions,
             strip_extra_bytes,
         }
@@ -168,7 +168,7 @@ where {
 
         let paths: Vec<_> = self.paths.iter().collect();
         let sendthreads = num_threads - 2;
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(20);
         let pool = ThreadPool::new(sendthreads);
 
         // Reader threads
@@ -341,7 +341,7 @@ mod tests {
             paths: vec![input_file_path.to_str().unwrap().to_string()],
             output_paths: vec![output_file_path.to_str().unwrap().to_string()],
             conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: false,
         };
 
@@ -359,7 +359,7 @@ mod tests {
             paths: vec!["non_existent_file.las".to_string()],
             output_paths: vec!["output.las".to_string()],
             conditions: vec![Arc::new(|_point| true)],
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: false,
         };
 
@@ -382,7 +382,7 @@ mod tests {
             paths: vec![input_file_path.to_string()],
             output_paths: vec![output_file_path.to_str().unwrap().to_string()],
             conditions: vec![Arc::new(|point| point.x < 5.0)], // Condition that filters points
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: false,
         };
 
@@ -422,7 +422,7 @@ mod tests {
                 Arc::new(|point: &Point| point.x < 5.0), // Condition for output1
                 Arc::new(|point: &Point| point.x >= 5.0), // Condition for output2
             ],
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: false,
         };
 
@@ -466,7 +466,7 @@ mod tests {
             paths: vec![input_file_path.to_str().unwrap().to_string()],
             output_paths: vec![output_file_path.to_str().unwrap().to_string()],
             conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: false,
         };
 
@@ -495,7 +495,7 @@ mod tests {
             paths: vec![input_file_path.to_str().unwrap().to_string()],
             output_paths: vec![output_file_path.to_str().unwrap().to_string()],
             conditions: vec![Arc::new(|_point| true)], // Simple condition that always returns true
-            vec_size: 1000,
+            vec_size: 100000,
             strip_extra_bytes: true, // Enable strip_extra_bytes
         };
 
