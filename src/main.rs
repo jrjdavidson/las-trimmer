@@ -85,7 +85,7 @@ fn main() -> Result<(), MyError> {
         }
     }
 
-    println!("{:?}", paths);
+    println!("{:?} files were found", paths.len());
 
     let filter_functions: Vec<SharedFunction> = cli
         .filter
