@@ -149,14 +149,14 @@ where {
         use las::point::Format;
         use las::Builder;
         {
-            let reader1 = Reader::from_path(&self.paths[0]).unwrap();
+            let reader1 = Reader::from_path(&self.paths[0])?;
             let old_header = reader1.header().clone();
             if self.strip_extra_bytes {
-                let format_u8 = old_header.point_format().to_u8().unwrap();
+                let format_u8 = old_header.point_format().to_u8()?;
                 println!("Old header format : {}", format_u8);
 
                 let mut new_format = Format::new(format_u8).unwrap();
-                let mut builder = Builder::new(old_header.into_raw().unwrap()).unwrap();
+                let mut builder = Builder::new(old_header.into_raw()?)?;
                 new_format.extra_bytes = 0;
                 builder.point_format = new_format;
 
@@ -279,7 +279,7 @@ where {
         // Writer threads
         let mut writers: Vec<Writer<BufWriter<File>>> = Vec::new();
         for output_path in &self.output_paths {
-            let writer = Writer::from_path(output_path, header.clone()).unwrap();
+            let writer = Writer::from_path(output_path, header.clone())?;
             writers.push(writer);
         }
         while let Ok((index, points_vec)) = rx.recv() {
@@ -289,7 +289,7 @@ where {
                 if self.strip_extra_bytes {
                     point.extra_bytes.clear();
                 }
-                writers[index].write_point(point).unwrap();
+                writers[index].write_point(point)?;
             }
             {
                 let mut points_w = points_written
@@ -300,11 +300,8 @@ where {
             }
         }
 
-        let points_w = points_written
-            .lock()
-            .map_err(|_| MyError::LockError)
-            .unwrap();
-        let points_r = points_read.lock().map_err(|_| MyError::LockError).unwrap();
+        let points_w = points_written.lock().map_err(|_| MyError::LockError)?;
+        let points_r = points_read.lock().map_err(|_| MyError::LockError)?;
 
         println!(
             "Total points read/written: {}/{}",
