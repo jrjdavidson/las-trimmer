@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 assert_cmd = "2.0.16"
 clap = { version = "4.5.18", features = ["derive"] }
+crossbeam = "0.8.4"
 las = { version = "0.9.1", features = ["laz-parallel"] }
 num-format = "0.4.4"
 num_cpus = "1.16.0"
